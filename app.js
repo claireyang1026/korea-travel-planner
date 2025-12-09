@@ -1,43 +1,90 @@
-// app.js
+// app.js — Firebase 多人同步版
 
-const { createApp } = Vue;
+// 1. 匯入 Firebase (CDN 模組版)
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  onSnapshot
+} from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
 
-let googleMap = null;
-let googleMarker = null;
-
-window.initGoogleMaps = function () {
-  // Google 會在載完 JS 後呼叫這個
-  console.log("Google Maps SDK loaded");
+// 2. 這裡貼上你在 Firebase Console 看到的 firebaseConfig
+// ⚠️ 把下面這段換成「你自己的」那一段
+const firebaseConfig = {
+  apiKey: "AIzaSyBGgCKVVDF7AUcsd8VrisM3p6fWPIx1iow",
+  authDomain: "korea-travel-planner.firebaseapp.com",
+  projectId: "korea-travel-planner",
+  storageBucket: "korea-travel-planner.firebasestorage.app",
+  messagingSenderId: "408025232778",
+  appId: "1:408025232778:web:ccd3e4746b2a654ec84473"
 };
+
+// 3. 初始化 Firebase & Firestore
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+
+// Firestore 文件路徑（大家共用同一份）
+const TRIP_DOC_REF = doc(db, "trips", "korea-shared-trip");
+
+// 4. Google Maps 載入回呼（給 index.html 最後那個 &callback=initGoogleMaps 用）
+window.googleMapsLoaded = false;
+window.initGoogleMaps = function () {
+  window.googleMapsLoaded = true;
+  if (window.vueApp && typeof window.vueApp.initMap === "function") {
+    setTimeout(() => {
+      try {
+        if (typeof google !== "undefined" && google.maps) {
+          window.vueApp.initMap();
+        }
+      } catch (e) {
+        console.error("呼叫 initMap 時發生錯誤:", e);
+      }
+    }, 200);
+  }
+};
+
+// 5. Vue 應用程式
+const { createApp } = Vue;
 
 const app = createApp({
   data() {
     return {
-      // --------------- UI / Tab ---------------
+      // 狀態
+      activeTab: "transport",
       tabs: [
         { id: "daily", name: "每日行程總覽" },
         { id: "transport", name: "機票/車票" },
         { id: "itinerary", name: "行程規劃" },
         { id: "accommodation", name: "入住資料" },
-        { id: "checklist", name: "必備物品清單" },
         { id: "expense", name: "記帳功能" },
+        { id: "checklist", name: "必備物品清單" }
       ],
-      activeTab: "daily",
 
-      // PWA 安裝
-      showInstallButton: false,
-      deferredPrompt: null,
-
-      // --------------- 多人同步狀態 ---------------
-      isLoadingFromCloud: true,
-      isSavingToCloud: false,
-
-      // --------------- 行程日期 / 每日行程 ---------------
-      tripStartDate: null, // "2025-03-10"
-      tripEndDate: null,   // "2025-03-16"
+      // 每日行程總覽
+      selectedDate: new Date().toISOString().split("T")[0],
       selectedDayNumber: 1,
 
-      // --------------- 交通 ---------------
+      // 匯率（1 韓元 = ? 台幣）
+      exchangeRate: 0.025,
+
+      // Google Maps 相關
+      map: null,
+      showMapModal: false,
+      currentLocationName: "",
+      currentLocation: null,
+      currentMarker: null,
+      placeSuggestions: [],
+      showSuggestions: false,
+      placesService: null,
+      autocompleteService: null,
+      directionsService: null,
+      directionsRenderer: null,
+      routeInfo: null,
+      currentPosition: null, // 目前所在位置
+
+      // 交通資料
       transports: [],
       newTransport: {
         type: "",
@@ -46,28 +93,26 @@ const app = createApp({
         date: "",
         departureTime: "",
         arrivalTime: "",
-        notes: "",
+        notes: ""
       },
+      editingTransportIndex: null,
 
-      // --------------- 行程 ---------------
+      // 行程資料
       itineraries: [],
       newItinerary: {
         date: "",
         time: "",
         location: "",
+        description: "",
         address: "",
         lat: "",
         lng: "",
         fromItineraryId: "",
-        description: "",
-        routeInfo: null,
+        routeInfo: null
       },
-      showSuggestions: false,
-      placeSuggestions: [],
-      // 這個只是 demo 用，實際上你可以接 Places API
-      placeSearchTimeout: null,
+      editingItineraryIndex: null,
 
-      // --------------- 住宿 ---------------
+      // 住宿資料
       accommodations: [],
       newAccommodation: {
         name: "",
@@ -76,423 +121,369 @@ const app = createApp({
         address: "",
         phone: "",
         roomNumber: "",
-        notes: "",
+        notes: ""
       },
+      editingAccommodationIndex: null,
 
-      // --------------- 必備物品 ---------------
-      checklistItems: [],
-      newChecklistItem: {
-        name: "",
-        person1Checked: false,
-        person2Checked: false,
-      },
-      person1Name: "",
-      person2Name: "",
-
-      // --------------- 記帳 ---------------
-      exchangeRate: 0.025,
+      // 記帳資料
       expenses: [],
       newExpense: {
         type: "",
-        amount: null,
+        amount: 0,
         category: "",
         date: "",
         time: "",
-        notes: "",
+        notes: ""
       },
+      editingExpenseIndex: null,
 
-      // --------------- 地圖 modal ---------------
-      showMapModal: false,
-      currentLocationName: "",
-      routeInfo: null,
+      // 必備物品清單
+      checklistItems: [],
+      newChecklistItem: {
+        name: ""
+      },
+      person1Name: "人員 1",
+      person2Name: "人員 2",
+
+      // PWA 安裝提示
+      showInstallButton: false,
+      deferredPrompt: null,
+
+      // Firestore 同步狀態
+      db,
+      isApplyingRemoteData: false // 避免 onSnapshot 更新時又觸發 save
     };
   },
 
   computed: {
-    // ----------------- 每日行程相關 -----------------
-    tripDays() {
-      if (!this.tripStartDate || !this.tripEndDate) return [];
-
-      const days = [];
-      const start = new Date(this.tripStartDate);
-      const end = new Date(this.tripEndDate);
-
-      let cur = new Date(start);
-      let idx = 1;
-      while (cur <= end) {
-        const dateStr = cur.toISOString().slice(0, 10);
-        days.push({
-          dayNumber: idx,
-          date: dateStr,
-          label: `Day${idx}`,
-        });
-        idx++;
-        cur.setDate(cur.getDate() + 1);
-      }
-      return days;
-    },
-
-    currentDayInfo() {
-      return this.tripDays.find(
-        (d) => d.dayNumber === this.selectedDayNumber
-      ) || null;
-    },
-
-    dailySchedule() {
-      if (!this.currentDayInfo) return [];
-
-      const date = this.currentDayInfo.date;
-
-      const items = [];
-
-      // 交通
-      this.transports
-        .filter((t) => t.date === date)
-        .forEach((t) => {
-          items.push({
-            type: "交通",
-            time: t.departureTime || "--:--",
-            title: `${t.type}：${t.from} → ${t.to}`,
-            details: `時間：${t.departureTime} - ${t.arrivalTime}${
-              t.notes ? "｜備註：" + t.notes : ""
-            }`,
-            color: "#4a90e2",
-            locationData: null,
-          });
-        });
-
-      // 行程
-      this.itineraries
-        .filter((it) => it.date === date)
-        .forEach((it) => {
-          items.push({
-            type: "行程",
-            time: it.time || "--:--",
-            title: it.location,
-            details: it.description || "",
-            color: "#27ae60",
-            locationData: {
-              lat: it.lat ? Number(it.lat) : null,
-              lng: it.lng ? Number(it.lng) : null,
-            },
-          });
-        });
-
-      // 住宿（顯示入住 / 退房）
-      this.accommodations.forEach((a) => {
-        if (a.checkIn === date) {
-          items.push({
-            type: "住宿",
-            time: "入住",
-            title: `${a.name}（入住）`,
-            details: a.address || "",
-            color: "#f39c12",
-            locationData: null,
-          });
-        }
-        if (a.checkOut === date) {
-          items.push({
-            type: "住宿",
-            time: "退房",
-            title: `${a.name}（退房）`,
-            details: a.address || "",
-            color: "#f39c12",
-            locationData: null,
-          });
-        }
-      });
-
-      // 依時間排序
-      items.sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-      return items;
-    },
-
-    // 行程排序列表
+    // 行程排序
     sortedItineraries() {
       return [...this.itineraries].sort((a, b) => {
-        const ad = `${a.date || ""} ${a.time || ""}`;
-        const bd = `${b.date || ""} ${b.time || ""}`;
-        return ad.localeCompare(bd);
+        const dateCompare = a.date.localeCompare(b.date);
+        if (dateCompare !== 0) return dateCompare;
+        return a.time.localeCompare(b.time);
       });
     },
 
-    // 行程下拉：可當作「上一個行程」的候選
+    // 可當作出發點的行程（有座標）
     availablePreviousItineraries() {
-      return this.sortedItineraries.map((it, index) => ({
-        ...it,
-        originalIndex: index,
-      }));
+      return this.itineraries
+        .map((it, idx) => ({ ...it, originalIndex: idx }))
+        .filter((it, idx) => {
+          if (!it.lat || !it.lng) return false;
+          if (this.editingItineraryIndex !== null) {
+            return idx !== this.editingItineraryIndex;
+          }
+          return true;
+        });
     },
 
-    // ----------------- 記帳統計 -----------------
+    // 記帳排序
+    sortedExpenses() {
+      return [...this.expenses].sort((a, b) => {
+        const dateCompare = b.date.localeCompare(a.date);
+        if (dateCompare !== 0) return dateCompare;
+        return b.time.localeCompare(a.time);
+      });
+    },
+
     totalIncome() {
       return this.expenses
         .filter((e) => e.type === "income")
-        .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+        .reduce((sum, e) => sum + e.amount, 0);
     },
     totalExpense() {
       return this.expenses
         .filter((e) => e.type === "expense")
-        .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+        .reduce((sum, e) => sum + e.amount, 0);
     },
     balance() {
       return this.totalIncome - this.totalExpense;
     },
     totalIncomeTWD() {
-      return this.convertToTWD(this.totalIncome);
+      return Math.round(this.totalIncome * this.exchangeRate);
     },
     totalExpenseTWD() {
-      return this.convertToTWD(this.totalExpense);
+      return Math.round(this.totalExpense * this.exchangeRate);
     },
     balanceTWD() {
-      return this.convertToTWD(this.balance);
+      return Math.round(this.balance * this.exchangeRate);
     },
 
-    sortedExpenses() {
-      return [...this.expenses].sort((a, b) => {
-        const ad = `${a.date || ""} ${a.time || ""}`;
-        const bd = `${b.date || ""} ${b.time || ""}`;
-        return ad.localeCompare(bd);
-      });
-    },
-  },
-
-  watch: {
-    // 任何資料改變就同步到 Firestore
-    transports: {
-      deep: true,
-      handler() {
-        this.updateTripDateRange();
-        this.saveToFirestore();
-      },
-    },
-    itineraries: {
-      deep: true,
-      handler() {
-        this.updateTripDateRange();
-        this.saveToFirestore();
-      },
-    },
-    accommodations: {
-      deep: true,
-      handler() {
-        this.updateTripDateRange();
-        this.saveToFirestore();
-      },
-    },
-    checklistItems: {
-      deep: true,
-      handler() {
-        this.saveToFirestore();
-      },
-    },
-    expenses: {
-      deep: true,
-      handler() {
-        this.saveToFirestore();
-      },
-    },
-    person1Name() {
-      this.saveToFirestore();
-    },
-    person2Name() {
-      this.saveToFirestore();
-    },
-    exchangeRate() {
-      this.saveToFirestore();
-    },
+    // 行程開始/結束日期
     tripStartDate() {
-      this.saveToFirestore();
+      const allDates = [];
+
+      this.transports
+        .filter((t) => t.type === "機票")
+        .forEach((f) => allDates.push(f.date));
+
+      this.itineraries.forEach((i) => {
+        if (i.date) allDates.push(i.date);
+      });
+
+      this.accommodations.forEach((a) => {
+        if (a.checkIn) allDates.push(a.checkIn);
+        if (a.checkOut) allDates.push(a.checkOut);
+      });
+
+      if (allDates.length === 0) return null;
+      return allDates.sort()[0];
     },
+
     tripEndDate() {
-      this.saveToFirestore();
+      const allDates = [];
+
+      this.transports
+        .filter((t) => t.type === "機票")
+        .forEach((f) => allDates.push(f.date));
+
+      this.itineraries.forEach((i) => {
+        if (i.date) allDates.push(i.date);
+      });
+
+      this.accommodations.forEach((a) => {
+        if (a.checkIn) allDates.push(a.checkIn);
+        if (a.checkOut) allDates.push(a.checkOut);
+      });
+
+      if (allDates.length === 0) return null;
+
+      const sortedDates = allDates.sort();
+      return sortedDates[sortedDates.length - 1];
     },
+
+    // 產生 Day1, Day2 ... 清單
+    tripDays() {
+      if (!this.tripStartDate || !this.tripEndDate) return [];
+
+      const days = [];
+      const startParts = this.tripStartDate.split("-");
+      const endParts = this.tripEndDate.split("-");
+      const start = new Date(
+        parseInt(startParts[0]),
+        parseInt(startParts[1]) - 1,
+        parseInt(startParts[2])
+      );
+      const end = new Date(
+        parseInt(endParts[0]),
+        parseInt(endParts[1]) - 1,
+        parseInt(endParts[2])
+      );
+
+      let currentDate = new Date(start);
+      let dayNumber = 1;
+      const endDateOnly = new Date(
+        end.getFullYear(),
+        end.getMonth(),
+        end.getDate()
+      );
+
+      while (currentDate <= endDateOnly) {
+        const year = currentDate.getFullYear();
+        const month = String(currentDate.getMonth() + 1).padStart(2, "0");
+        const day = String(currentDate.getDate()).padStart(2, "0");
+        const dateStr = `${year}-${month}-${day}`;
+
+        days.push({
+          dayNumber,
+          date: dateStr,
+          label: `Day ${dayNumber}`
+        });
+        dayNumber++;
+
+        currentDate = new Date(currentDate);
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+
+      return days;
+    },
+
+    currentDayInfo() {
+      return this.tripDays.find((d) => d.dayNumber === this.selectedDayNumber) || null;
+    },
+
+    // 每日行程總覽
+    dailySchedule() {
+      let targetDate = this.selectedDate;
+      if (this.currentDayInfo) targetDate = this.currentDayInfo.date;
+
+      const schedule = [];
+
+      // 交通
+      this.transports.forEach((transport) => {
+        if (transport.date === targetDate) {
+          schedule.push({
+            time: transport.departureTime,
+            title: `${transport.type}：${transport.from} → ${transport.to}`,
+            type: "交通",
+            details: `抵達時間：${transport.arrivalTime}`,
+            extraInfo: transport.notes ? `備註：${transport.notes}` : null,
+            color: "#3498db"
+          });
+        }
+      });
+
+      // 行程
+      this.itineraries.forEach((itinerary) => {
+        if (itinerary.date === targetDate) {
+          const routeInfoText =
+            itinerary.routeInfo && itinerary.routeInfo.length > 0
+              ? `從 ${this.getItineraryName(itinerary.fromItineraryId)} 出發：${
+                  itinerary.routeInfo[0].duration
+                }（${itinerary.routeInfo[0].distance}）`
+              : null;
+
+          schedule.push({
+            time: itinerary.time,
+            title: itinerary.location,
+            type: "行程",
+            details: itinerary.description || null,
+            extraInfo: routeInfoText,
+            color: "#27ae60",
+            locationData:
+              itinerary.lat && itinerary.lng
+                ? {
+                    location: itinerary.location,
+                    lat: itinerary.lat,
+                    lng: itinerary.lng,
+                    address: itinerary.address,
+                    routeInfo: itinerary.routeInfo,
+                    fromItineraryId: itinerary.fromItineraryId
+                  }
+                : null
+          });
+        }
+      });
+
+      // 住宿
+      this.accommodations.forEach((a) => {
+        if (a.checkIn === targetDate) {
+          schedule.push({
+            time: "14:00",
+            title: `入住：${a.name}`,
+            type: "住宿",
+            details: a.address ? `地址：${a.address}` : null,
+            extraInfo: a.roomNumber ? `房間：${a.roomNumber}` : null,
+            color: "#e67e22"
+          });
+        }
+        if (a.checkOut === targetDate) {
+          schedule.push({
+            time: "11:00",
+            title: `退房：${a.name}`,
+            type: "住宿",
+            details: null,
+            extraInfo: null,
+            color: "#e67e22"
+          });
+        }
+      });
+
+      return schedule.sort((a, b) => a.time.localeCompare(b.time));
+    }
   },
 
   methods: {
-    // -------------- 日期格式 --------------
-    formatDate(dateStr) {
-      if (!dateStr) return "";
-      const d = new Date(dateStr);
-      if (isNaN(d)) return dateStr;
-      return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(
-        2,
-        "0"
-      )}/${String(d.getDate()).padStart(2, "0")}`;
-    },
-    formatDateRange(start, end) {
-      if (!start || !end) return "尚未設定";
-      return `${this.formatDate(start)} - ${this.formatDate(end)}`;
-    },
+    // ====== Firestore 儲存 / 載入 ======
+    async saveToFirestore() {
+      if (!this.db || this.isApplyingRemoteData) return;
 
-    // 根據所有資料計算 tripStartDate / tripEndDate
-    updateTripDateRange() {
-      const dates = [];
-
-      this.transports.forEach((t) => t.date && dates.push(t.date));
-      this.itineraries.forEach((it) => it.date && dates.push(it.date));
-      this.accommodations.forEach((a) => {
-        a.checkIn && dates.push(a.checkIn);
-        a.checkOut && dates.push(a.checkOut);
-      });
-
-      if (dates.length === 0) return;
-
-      dates.sort();
-      this.tripStartDate = dates[0];
-      this.tripEndDate = dates[dates.length - 1];
-
-      // 如果目前選擇天數超出範圍，重設為 1
-      if (
-        this.selectedDayNumber < 1 ||
-        this.selectedDayNumber > this.tripDays.length
-      ) {
-        this.selectedDayNumber = 1;
-      }
-    },
-
-    // -------------- PWA 安裝 --------------
-    installApp() {
-      if (!this.deferredPrompt) return;
-      this.deferredPrompt.prompt();
-      this.deferredPrompt.userChoice.finally(() => {
-        this.deferredPrompt = null;
-        this.showInstallButton = false;
-      });
-    },
-
-    // -------------- localStorage 備份 --------------
-    saveToLocalStorage() {
       const payload = {
         transports: this.transports,
         itineraries: this.itineraries,
         accommodations: this.accommodations,
-        checklistItems: this.checklistItems,
         expenses: this.expenses,
-        person1Name: this.person1Name,
-        person2Name: this.person2Name,
+        checklistItems: this.checklistItems,
         exchangeRate: this.exchangeRate,
-        tripStartDate: this.tripStartDate,
-        tripEndDate: this.tripEndDate,
+        person1Name: this.person1Name,
+        person2Name: this.person2Name
       };
-      localStorage.setItem("kr_trip_data", JSON.stringify(payload));
-    },
 
-    loadFromLocalStorage() {
-      const raw = localStorage.getItem("kr_trip_data");
-      if (!raw) return;
       try {
-        const data = JSON.parse(raw);
-        this.applyCloudOrLocalData(data);
-      } catch (e) {
-        console.error("解析 localStorage 失敗：", e);
+        await setDoc(TRIP_DOC_REF, payload, { merge: true });
+        // console.log("已儲存到 Firestore");
+      } catch (err) {
+        console.error("儲存到 Firestore 失敗:", err);
       }
     },
 
-    // -------------- Firestore 多人同步 --------------
-    async loadFromFirestore() {
+    async loadFromFirestoreAndListen() {
       try {
-        if (!window.tripDocRef || !window.firebaseFns) {
-          console.warn("Firestore 尚未初始化，改用 localStorage。");
-          this.loadFromLocalStorage();
-          this.isLoadingFromCloud = false;
-          return;
-        }
-
-        const { getDoc, onSnapshot, setDoc } = window.firebaseFns;
-        const docRef = window.tripDocRef;
-
-        const snap = await getDoc(docRef);
-
+        // 先讀一次現有資料
+        const snap = await getDoc(TRIP_DOC_REF);
         if (snap.exists()) {
-          this.applyCloudOrLocalData(snap.data());
+          this.isApplyingRemoteData = true;
+          const data = snap.data() || {};
+
+          this.transports = data.transports || [];
+          this.itineraries = data.itineraries || [];
+          this.accommodations = data.accommodations || [];
+          this.expenses = data.expenses || [];
+          this.checklistItems = data.checklistItems || [];
+          this.exchangeRate =
+            typeof data.exchangeRate === "number" ? data.exchangeRate : 0.025;
+          this.person1Name = data.person1Name || "人員 1";
+          this.person2Name = data.person2Name || "人員 2";
+
+          this.isApplyingRemoteData = false;
         } else {
-          // 初次建立空文件
-          await setDoc(docRef, {
+          // 如果沒有資料，就建立一份空的
+          await setDoc(TRIP_DOC_REF, {
             transports: [],
             itineraries: [],
             accommodations: [],
-            checklistItems: [],
             expenses: [],
-            person1Name: "",
-            person2Name: "",
-            exchangeRate: 0.025,
-            tripStartDate: null,
-            tripEndDate: null,
+            checklistItems: [],
+            exchangeRate: this.exchangeRate,
+            person1Name: this.person1Name,
+            person2Name: this.person2Name
           });
         }
 
-        // 監聽線上更新（別人修改會同步進來）
-        onSnapshot(docRef, (snapshot) => {
+        // 之後持續聽遠端變化（多人同步）
+        onSnapshot(TRIP_DOC_REF, (snapshot) => {
           if (!snapshot.exists()) return;
-          if (this.isSavingToCloud) return; // 避免自己剛寫入又被蓋掉
-          this.applyCloudOrLocalData(snapshot.data());
+          const data = snapshot.data() || {};
+          this.isApplyingRemoteData = true;
+
+          this.transports = data.transports || [];
+          this.itineraries = data.itineraries || [];
+          this.accommodations = data.accommodations || [];
+          this.expenses = data.expenses || [];
+          this.checklistItems = data.checklistItems || [];
+          this.exchangeRate =
+            typeof data.exchangeRate === "number" ? data.exchangeRate : 0.025;
+          this.person1Name = data.person1Name || "人員 1";
+          this.person2Name = data.person2Name || "人員 2";
+
+          this.isApplyingRemoteData = false;
         });
       } catch (err) {
-        console.error("讀取 Firestore 失敗，改用 localStorage：", err);
-        this.loadFromLocalStorage();
-      } finally {
-        this.isLoadingFromCloud = false;
+        console.error("讀取 Firestore 失敗:", err);
       }
     },
 
-    applyCloudOrLocalData(data) {
-      this.transports = data.transports || [];
-      this.itineraries = data.itineraries || [];
-      this.accommodations = data.accommodations || [];
-      this.checklistItems = data.checklistItems || [];
-      this.expenses = data.expenses || [];
-      this.person1Name = data.person1Name || "";
-      this.person2Name = data.person2Name || "";
-      this.exchangeRate =
-        typeof data.exchangeRate === "number"
-          ? data.exchangeRate
-          : 0.025;
-      this.tripStartDate = data.tripStartDate || null;
-      this.tripEndDate = data.tripEndDate || null;
-
-      this.updateTripDateRange();
-    },
-
-    async saveToFirestore() {
-      // 先存 localStorage 當備份
-      this.saveToLocalStorage();
-
-      if (!window.tripDocRef || !window.firebaseFns) {
-        return; // 沒有 Firestore 就只用 localStorage
-      }
-
-      try {
-        this.isSavingToCloud = true;
-
-        const { setDoc } = window.firebaseFns;
-        const docRef = window.tripDocRef;
-
-        const payload = {
-          transports: this.transports,
-          itineraries: this.itineraries,
-          accommodations: this.accommodations,
-          checklistItems: this.checklistItems,
-          expenses: this.expenses,
-          person1Name: this.person1Name,
-          person2Name: this.person2Name,
-          exchangeRate: this.exchangeRate,
-          tripStartDate: this.tripStartDate || null,
-          tripEndDate: this.tripEndDate || null,
-        };
-
-        await setDoc(docRef, payload, { merge: true });
-      } catch (err) {
-        console.error("寫入 Firestore 失敗：", err);
-      } finally {
-        this.isSavingToCloud = false;
-      }
-    },
-
-    // -------------- 交通 CRUD --------------
+    // ====== 交通 ======
     addTransport() {
-      if (!this.newTransport.type || !this.newTransport.date) return;
-      this.transports.push({ ...this.newTransport });
+      if (this.editingTransportIndex !== null) {
+        this.transports[this.editingTransportIndex] = { ...this.newTransport };
+        this.editingTransportIndex = null;
+      } else {
+        this.transports.push({ ...this.newTransport });
+      }
+      this.resetTransportForm();
+    },
+    editTransport(index) {
+      this.newTransport = { ...this.transports[index] };
+      this.editingTransportIndex = index;
+    },
+    deleteTransport(index) {
+      if (confirm("確定要刪除這筆記錄嗎？")) {
+        this.transports.splice(index, 1);
+      }
+    },
+    resetTransportForm() {
       this.newTransport = {
         type: "",
         from: "",
@@ -500,96 +491,330 @@ const app = createApp({
         date: "",
         departureTime: "",
         arrivalTime: "",
-        notes: "",
+        notes: ""
       };
     },
-    editTransport(index) {
-      this.newTransport = { ...this.transports[index] };
-      this.transports.splice(index, 1);
-      this.activeTab = "transport";
-    },
-    deleteTransport(index) {
-      this.transports.splice(index, 1);
+
+    // ====== 行程 ======
+    async addItinerary() {
+      const itineraryData = { ...this.newItinerary };
+
+      if (itineraryData.fromItineraryId !== "" && itineraryData.lat && itineraryData.lng) {
+        const fromItinerary = this.itineraries[itineraryData.fromItineraryId];
+        if (fromItinerary && fromItinerary.lat && fromItinerary.lng) {
+          itineraryData.routeInfo = await this.calculateRouteBetween(
+            fromItinerary,
+            itineraryData
+          );
+        }
+      }
+
+      if (this.editingItineraryIndex !== null) {
+        this.itineraries[this.editingItineraryIndex] = itineraryData;
+        this.editingItineraryIndex = null;
+      } else {
+        this.itineraries.push(itineraryData);
+      }
+      this.resetItineraryForm();
     },
 
-    // -------------- 行程 CRUD --------------
-    addItinerary() {
-      if (!this.newItinerary.date || !this.newItinerary.time || !this.newItinerary.location) return;
-      this.itineraries.push({
-        ...this.newItinerary,
-        routeInfo: null,
-      });
+    async editItinerary(index) {
+      this.newItinerary = { ...this.itineraries[index] };
+      this.editingItineraryIndex = index;
+
+      if (this.newItinerary.fromItineraryId !== "" && this.newItinerary.lat && this.newItinerary.lng) {
+        const fromItinerary = this.itineraries[this.newItinerary.fromItineraryId];
+        if (fromItinerary && fromItinerary.lat && fromItinerary.lng) {
+          this.newItinerary.routeInfo = await this.calculateRouteBetween(
+            fromItinerary,
+            this.newItinerary
+          );
+        }
+      }
+    },
+
+    deleteItinerary(index) {
+      if (confirm("確定要刪除這個行程嗎？")) {
+        this.itineraries.splice(index, 1);
+      }
+    },
+
+    resetItineraryForm() {
       this.newItinerary = {
         date: "",
         time: "",
         location: "",
+        description: "",
         address: "",
         lat: "",
         lng: "",
         fromItineraryId: "",
-        description: "",
-        routeInfo: null,
+        routeInfo: null
       };
-    },
-    editItinerary(index) {
-      this.newItinerary = { ...this.itineraries[index] };
-      this.itineraries.splice(index, 1);
-      this.activeTab = "itinerary";
-    },
-    deleteItinerary(index) {
-      this.itineraries.splice(index, 1);
+      this.showSuggestions = false;
+      this.placeSuggestions = [];
     },
 
-    // 行程名稱（在路線資訊標題用）
-    getItineraryName(idx) {
-      const it = this.itineraries[idx];
-      if (!it) return "";
-      return `${it.date} ${it.time} ${it.location}`;
+    getItineraryName(id) {
+      if (id === null || id === undefined || id === "") return "未知地點";
+      const itinerary = this.itineraries[id];
+      return itinerary ? `${itinerary.location}` : "未知地點";
     },
 
-    // Demo 的地點搜尋（不是 Google Places，只是佔位）
-    searchPlaces() {
-      if (this.placeSearchTimeout) {
-        clearTimeout(this.placeSearchTimeout);
-      }
-      const keyword = this.newItinerary.location.trim();
-      if (!keyword) {
-        this.placeSuggestions = [];
+    // 計算兩個行程之間的路線（大眾運輸 + 步行）
+    calculateRouteBetween(fromItinerary, toItinerary) {
+      return new Promise((resolve) => {
+        if (!this.directionsService) {
+          resolve(null);
+          return;
+        }
+
+        const origin = {
+          lat: parseFloat(fromItinerary.lat),
+          lng: parseFloat(fromItinerary.lng)
+        };
+        const destination = {
+          lat: parseFloat(toItinerary.lat),
+          lng: parseFloat(toItinerary.lng)
+        };
+
+        const routes = [];
+        let completed = 0;
+        const totalModes = 2;
+
+        // TRANSIT
+        this.directionsService.route(
+          {
+            origin,
+            destination,
+            travelMode: google.maps.TravelMode.TRANSIT,
+            language: "zh-TW",
+            transitOptions: {
+              modes: [google.maps.TransitMode.SUBWAY, google.maps.TransitMode.BUS],
+              routingPreference: google.maps.TransitRoutePreference.LESS_WALKING
+            }
+          },
+          (result, status) => {
+            if (status === "OK" && result.routes[0]) {
+              const leg = result.routes[0].legs[0];
+              const transitDetails = [];
+
+              leg.steps.forEach((step) => {
+                if (step.travel_mode === "WALKING") {
+                  transitDetails.push({
+                    type: "WALKING",
+                    instruction: step.instructions.replace(/<[^>]*>/g, ""),
+                    duration: step.duration.text
+                  });
+                } else if (step.travel_mode === "TRANSIT" && step.transit) {
+                  const t = step.transit;
+                  transitDetails.push({
+                    type: "TRANSIT",
+                    departureStop: t.departure_stop.name,
+                    arrivalStop: t.arrival_stop.name,
+                    lineName: t.line.name,
+                    headsign: t.headsign || "",
+                    numStops: t.num_stops,
+                    duration: step.duration.text
+                  });
+                }
+              });
+
+              // 轉乘
+              const transitSteps = leg.steps.filter(
+                (s) => s.travel_mode === "TRANSIT"
+              );
+              if (transitSteps.length > 1) {
+                for (let i = 0; i < transitSteps.length - 1; i++) {
+                  const currentStep = transitSteps[i];
+                  const nextStep = transitSteps[i + 1];
+                  const transferStation = currentStep.transit.arrival_stop.name;
+
+                  transitDetails.push({
+                    type: "TRANSFER",
+                    station: transferStation,
+                    toLine: nextStep.transit.line.name
+                  });
+                }
+              }
+
+              routes.push({
+                mode: "TRANSIT",
+                duration: leg.duration.text,
+                distance: leg.distance.text,
+                transitDetails
+              });
+            }
+            completed++;
+            if (completed === totalModes) resolve(routes.length > 0 ? routes : null);
+          }
+        );
+
+        // WALKING
+        this.directionsService.route(
+          {
+            origin,
+            destination,
+            travelMode: google.maps.TravelMode.WALKING,
+            language: "zh-TW"
+          },
+          (result, status) => {
+            if (status === "OK" && result.routes[0]) {
+              const leg = result.routes[0].legs[0];
+              routes.push({
+                mode: "WALKING",
+                duration: leg.duration.text,
+                distance: leg.distance.text,
+                steps: leg.steps.map((step) => ({
+                  instruction: step.instructions.replace(/<[^>]*>/g, ""),
+                  duration: step.duration.text
+                }))
+              });
+            }
+            completed++;
+            if (completed === totalModes) resolve(routes.length > 0 ? routes : null);
+          }
+        );
+      });
+    },
+
+    // 快速設定路線（prompt 選出發行程）
+    async quickSetRoute(toIndex) {
+      if (this.availablePreviousItineraries.length === 0) {
+        alert("沒有可用的出發行程，請先新增其他有地點座標的行程");
         return;
       }
-      this.placeSearchTimeout = setTimeout(() => {
-        this.placeSuggestions = [
-          {
-            name: keyword,
-            address: "自訂地址（可改成實際 Places API）",
-            lat: "",
-            lng: "",
-          },
-        ];
-      }, 300);
-    },
-    selectPlace(suggestion) {
-      this.newItinerary.location = suggestion.name;
-      this.newItinerary.address = suggestion.address || "";
-      this.newItinerary.lat = suggestion.lat || "";
-      this.newItinerary.lng = suggestion.lng || "";
-      this.placeSuggestions = [];
-      this.showSuggestions = false;
+
+      const fromOptions = this.availablePreviousItineraries
+        .map(
+          (it, idx) => `${idx + 1}. ${it.date} ${it.time} - ${it.location}`
+        )
+        .join("\n");
+
+      const selected = prompt(
+        `請選擇要從哪個行程出發：\n${fromOptions}\n\n請輸入編號（1-${this.availablePreviousItineraries.length}）：`
+      );
+      const selectedIndex = parseInt(selected) - 1;
+
+      if (
+        selectedIndex >= 0 &&
+        selectedIndex < this.availablePreviousItineraries.length
+      ) {
+        const fromItinerary = this.availablePreviousItineraries[selectedIndex];
+        this.itineraries[toIndex].fromItineraryId = fromItinerary.originalIndex;
+
+        const routeInfo = await this.calculateRouteBetween(
+          fromItinerary,
+          this.itineraries[toIndex]
+        );
+        this.itineraries[toIndex].routeInfo = routeInfo;
+
+        alert("路線已設定完成！");
+      }
     },
 
-    quickSetRoute(index) {
-      // 目前先不做實際路線計算，避免跟 Google Directions 再串一次
-      alert("目前路線規劃是簡化版本，之後可以再一起強化 🚇");
+    // 顯示兩個行程之間的路線（地圖 modal）
+    async showRouteBetween(fromId, toIdOrLocation) {
+      const fromItinerary =
+        typeof fromId === "number" ? this.itineraries[fromId] : null;
+      let toItinerary;
+
+      if (typeof toIdOrLocation === "object" && toIdOrLocation.lat) {
+        toItinerary = {
+          location: toIdOrLocation.location,
+          lat: toIdOrLocation.lat,
+          lng: toIdOrLocation.lng
+        };
+      } else {
+        toItinerary = this.itineraries[toIdOrLocation];
+      }
+
+      if (!fromItinerary || !toItinerary || !fromItinerary.lat || !toItinerary.lat) {
+        alert("無法計算路線：請確認兩個行程都有正確的地點座標");
+        return;
+      }
+
+      this.currentLocationName = `從 ${fromItinerary.location} 到 ${toItinerary.location}`;
+
+      if (!this.map) this.initMap();
+
+      const origin = {
+        lat: parseFloat(fromItinerary.lat),
+        lng: parseFloat(fromItinerary.lng)
+      };
+      const destination = {
+        lat: parseFloat(toItinerary.lat),
+        lng: parseFloat(toItinerary.lng)
+      };
+
+      this.showMapModal = true;
+      this.routeInfo = await this.calculateRouteBetween(
+        fromItinerary,
+        toItinerary
+      );
+
+      if (this.routeInfo && this.routeInfo.length > 0) {
+        const transitRoute = this.routeInfo.find((r) => r.mode === "TRANSIT");
+        if (transitRoute) {
+          this.directionsService.route(
+            {
+              origin,
+              destination,
+              travelMode: google.maps.TravelMode.TRANSIT,
+              language: "zh-TW",
+              transitOptions: {
+                modes: [google.maps.TransitMode.SUBWAY, google.maps.TransitMode.BUS]
+              }
+            },
+            (result, status) => {
+              if (status === "OK") {
+                this.directionsRenderer.setDirections(result);
+              }
+            }
+          );
+        } else {
+          const walkingRoute = this.routeInfo.find((r) => r.mode === "WALKING");
+          if (walkingRoute) {
+            this.directionsService.route(
+              {
+                origin,
+                destination,
+                travelMode: google.maps.TravelMode.WALKING,
+                language: "zh-TW"
+              },
+              (result, status) => {
+                if (status === "OK") {
+                  this.directionsRenderer.setDirections(result);
+                }
+              }
+            );
+          }
+        }
+      }
     },
 
-    showRouteBetween(fromId, indexOrObj) {
-      alert("路線詳細規劃尚未串接，先顯示地圖即可。");
-    },
-
-    // -------------- 住宿 CRUD --------------
+    // ====== 住宿 ======
     addAccommodation() {
-      if (!this.newAccommodation.name || !this.newAccommodation.checkIn || !this.newAccommodation.checkOut) return;
-      this.accommodations.push({ ...this.newAccommodation });
+      if (this.editingAccommodationIndex !== null) {
+        this.accommodations[this.editingAccommodationIndex] = {
+          ...this.newAccommodation
+        };
+        this.editingAccommodationIndex = null;
+      } else {
+        this.accommodations.push({ ...this.newAccommodation });
+      }
+      this.resetAccommodationForm();
+    },
+    editAccommodation(index) {
+      this.newAccommodation = { ...this.accommodations[index] };
+      this.editingAccommodationIndex = index;
+    },
+    deleteAccommodation(index) {
+      if (confirm("確定要刪除這筆住宿記錄嗎？")) {
+        this.accommodations.splice(index, 1);
+      }
+    },
+    resetAccommodationForm() {
       this.newAccommodation = {
         name: "",
         checkIn: "",
@@ -597,141 +822,379 @@ const app = createApp({
         address: "",
         phone: "",
         roomNumber: "",
-        notes: "",
+        notes: ""
       };
     },
-    editAccommodation(index) {
-      this.newAccommodation = { ...this.accommodations[index] };
-      this.accommodations.splice(index, 1);
-      this.activeTab = "accommodation";
+
+    // ====== 記帳 ======
+    addExpense() {
+      if (this.editingExpenseIndex !== null) {
+        this.expenses[this.editingExpenseIndex] = { ...this.newExpense };
+        this.editingExpenseIndex = null;
+      } else {
+        this.expenses.push({ ...this.newExpense });
+      }
+      this.resetExpenseForm();
     },
-    deleteAccommodation(index) {
-      this.accommodations.splice(index, 1);
+    editExpense(index) {
+      this.newExpense = { ...this.expenses[index] };
+      this.editingExpenseIndex = index;
+    },
+    deleteExpense(index) {
+      if (confirm("確定要刪除這筆記錄嗎？")) {
+        this.expenses.splice(index, 1);
+      }
+    },
+    resetExpenseForm() {
+      this.newExpense = {
+        type: "",
+        amount: 0,
+        category: "",
+        date: "",
+        time: "",
+        notes: ""
+      };
     },
 
-    // -------------- 必備物品 --------------
+    convertToTWD(krwAmount) {
+      return Math.round(krwAmount * this.exchangeRate);
+    },
+
+    // ====== 日期格式 ======
+    formatDate(dateString) {
+      if (!dateString) return "";
+      const date = new Date(dateString);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+      const weekday = weekdays[date.getDay()];
+      return `${year}年${month}月${day}日（星期${weekday}）`;
+    },
+    formatDateRange(startDate, endDate) {
+      if (!startDate || !endDate) return "";
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const startStr = `${start.getMonth() + 1}/${start.getDate()}`;
+      const endStr = `${end.getMonth() + 1}/${end.getDate()}`;
+      return `${startStr} - ${endStr}`;
+    },
+
+    // ====== Google Maps ======
+    initMap() {
+      try {
+        if (typeof google === "undefined" || !google.maps) {
+          console.warn("Google Maps API 未載入");
+          return;
+        }
+
+        const mapElement = document.getElementById("map");
+        if (!mapElement) return;
+
+        const seoul = { lat: 37.5665, lng: 126.978 };
+        this.map = new google.maps.Map(mapElement, {
+          zoom: 13,
+          center: seoul,
+          mapTypeControl: true,
+          streetViewControl: true
+        });
+
+        this.placesService = new google.maps.places.PlacesService(this.map);
+        this.autocompleteService = new google.maps.places.AutocompleteService();
+        this.directionsService = new google.maps.DirectionsService();
+        this.directionsRenderer = new google.maps.DirectionsRenderer();
+        this.directionsRenderer.setMap(this.map);
+
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              this.currentPosition = {
+                lat: position.coords.latitude,
+                lng: position.coords.longitude
+              };
+            },
+            () => {
+              this.currentPosition = seoul;
+            }
+          );
+        } else {
+          this.currentPosition = seoul;
+        }
+      } catch (e) {
+        console.error("初始化地圖錯誤:", e);
+      }
+    },
+
+    searchPlaces() {
+      if (!this.autocompleteService || !this.newItinerary.location) {
+        this.placeSuggestions = [];
+        return;
+      }
+
+      this.autocompleteService.getPlacePredictions(
+        {
+          input: this.newItinerary.location,
+          componentRestrictions: { country: "kr" },
+          language: "zh-TW"
+        },
+        (predictions, status) => {
+          if (
+            status === google.maps.places.PlacesServiceStatus.OK &&
+            predictions
+          ) {
+            this.placeSuggestions = predictions.map((pred) => ({
+              name: pred.description,
+              placeId: pred.place_id,
+              address: pred.description
+            }));
+          } else {
+            this.placeSuggestions = [];
+          }
+        }
+      );
+    },
+
+    selectPlace(suggestion) {
+      this.newItinerary.location = suggestion.name;
+      this.showSuggestions = false;
+
+      if (this.placesService) {
+        const request = {
+          placeId: suggestion.placeId,
+          fields: ["name", "formatted_address", "geometry"]
+        };
+
+        this.placesService.getDetails(request, (place, status) => {
+          if (status === google.maps.places.PlacesServiceStatus.OK) {
+            this.newItinerary.address = place.formatted_address;
+            this.newItinerary.lat = place.geometry.location.lat();
+            this.newItinerary.lng = place.geometry.location.lng();
+          }
+        });
+      }
+    },
+
+    showMap(location) {
+      if (!this.map) this.initMap();
+
+      this.currentLocationName = location.location || location.name || "地點";
+      this.currentLocation = {
+        lat: parseFloat(location.lat),
+        lng: parseFloat(location.lng)
+      };
+      this.routeInfo = null;
+
+      this.map.setCenter(this.currentLocation);
+      this.map.setZoom(15);
+
+      if (this.currentMarker) this.currentMarker.setMap(null);
+
+      this.currentMarker = new google.maps.Marker({
+        position: this.currentLocation,
+        map: this.map,
+        title: this.currentLocationName
+      });
+
+      this.showMapModal = true;
+    },
+
+    showRoute(destination) {
+      if (!this.map) this.initMap();
+
+      this.currentLocationName = destination.location || destination.name || "目的地";
+      const dest = {
+        lat: parseFloat(destination.lat),
+        lng: parseFloat(destination.lng)
+      };
+
+      const origin = this.currentPosition || { lat: 37.5665, lng: 126.978 };
+
+      this.showMapModal = true;
+      this.routeInfo = [];
+
+      this.directionsRenderer.setDirections({ routes: [] });
+
+      const modes = [
+        { mode: "TRANSIT", name: "大眾運輸" },
+        { mode: "DRIVING", name: "開車" },
+        { mode: "WALKING", name: "步行" }
+      ];
+
+      modes.forEach(({ mode, name }) => {
+        this.directionsService.route(
+          {
+            origin,
+            destination: dest,
+            travelMode: google.maps.TravelMode[mode],
+            language: "zh-TW"
+          },
+          (result, status) => {
+            if (status === "OK" && result.routes[0]) {
+              const leg = result.routes[0].legs[0];
+              const routeData = {
+                mode,
+                name,
+                duration: leg.duration.text,
+                distance: leg.distance.text,
+                steps: leg.steps.map((step) => ({
+                  instruction: step.instructions.replace(/<[^>]*>/g, ""),
+                  duration: step.duration.text
+                }))
+              };
+              this.routeInfo.push(routeData);
+
+              if (mode === "TRANSIT") {
+                this.directionsRenderer.setDirections(result);
+              }
+            }
+          }
+        );
+      });
+    },
+
+    closeMapModal() {
+      this.showMapModal = false;
+      this.routeInfo = null;
+      if (this.currentMarker) this.currentMarker.setMap(null);
+    },
+
+    // ====== 必備物品清單 ======
     addChecklistItem() {
-      if (!this.newChecklistItem.name.trim()) return;
       this.checklistItems.push({
-        name: this.newChecklistItem.name.trim(),
+        name: this.newChecklistItem.name,
         person1Checked: false,
-        person2Checked: false,
+        person2Checked: false
       });
       this.newChecklistItem.name = "";
     },
-    toggleChecklistItem(index, who) {
-      const item = this.checklistItems[index];
-      if (!item) return;
-      if (who === "person1") {
-        item.person1Checked = !item.person1Checked;
-      } else if (who === "person2") {
-        item.person2Checked = !item.person2Checked;
+    toggleChecklistItem(index, person) {
+      if (person === "person1") {
+        this.checklistItems[index].person1Checked =
+          !this.checklistItems[index].person1Checked;
+      } else if (person === "person2") {
+        this.checklistItems[index].person2Checked =
+          !this.checklistItems[index].person2Checked;
       }
     },
     deleteChecklistItem(index) {
-      this.checklistItems.splice(index, 1);
+      if (confirm("確定要刪除這個物品嗎？")) {
+        this.checklistItems.splice(index, 1);
+      }
     },
     isItemCompleted(item) {
       return item.person1Checked && item.person2Checked;
     },
-    getPersonCheckedCount(who) {
+    getPersonCheckedCount(person) {
       return this.checklistItems.filter((item) =>
-        who === "person1" ? item.person1Checked : item.person2Checked
+        person === "person1" ? item.person1Checked : item.person2Checked
       ).length;
     },
-    getPersonCompletion(who) {
+    getPersonCompletion(person) {
       if (this.checklistItems.length === 0) return 0;
-      const count = this.getPersonCheckedCount(who);
-      return Math.round((count / this.checklistItems.length) * 100);
+      return Math.round(
+        (this.getPersonCheckedCount(person) / this.checklistItems.length) * 100
+      );
     },
 
-    // -------------- 記帳 --------------
-    convertToTWD(amount) {
-      return Math.round((Number(amount) || 0) * (Number(this.exchangeRate) || 0));
+    // ====== PWA 安裝 ======
+    showInstallPrompt() {
+      this.showInstallButton = true;
     },
-    addExpense() {
-      if (!this.newExpense.type || !this.newExpense.amount) return;
-      this.expenses.push({ ...this.newExpense });
-      this.newExpense = {
-        type: "",
-        amount: null,
-        category: "",
-        date: "",
-        time: "",
-        notes: "",
-      };
-    },
-    editExpense(index) {
-      this.newExpense = { ...this.expenses[index] };
-      this.expenses.splice(index, 1);
-      this.activeTab = "expense";
-    },
-    deleteExpense(index) {
-      this.expenses.splice(index, 1);
-    },
-
-    // -------------- 地圖 --------------
-    showMap(locationData) {
-      if (!locationData || !locationData.lat || !locationData.lng) return;
-      this.currentLocationName = locationData.location || this.currentDayInfo?.label || "位置";
-      this.showMapModal = true;
-      this.routeInfo = null;
-
-      const lat = Number(locationData.lat);
-      const lng = Number(locationData.lng);
-
-      this.$nextTick(() => {
-        const el = document.getElementById("map");
-        if (!el || !window.google || !google.maps) return;
-
-        if (!googleMap) {
-          googleMap = new google.maps.Map(el, {
-            center: { lat, lng },
-            zoom: 15,
-          });
-        } else {
-          googleMap.setCenter({ lat, lng });
-          googleMap.setZoom(15);
-        }
-
-        if (googleMarker) {
-          googleMarker.setMap(null);
-        }
-        googleMarker = new google.maps.Marker({
-          position: { lat, lng },
-          map: googleMap,
-        });
-      });
-    },
-    showRoute(locationData) {
-      // 簡化版：先跟 showMap 一樣，只顯示位置
-      this.showMap(locationData);
-    },
-    closeMapModal() {
-      this.showMapModal = false;
-      this.routeInfo = null;
-    },
+    async installApp() {
+      if (this.deferredPrompt) {
+        this.deferredPrompt.prompt();
+        const { outcome } = await this.deferredPrompt.userChoice;
+        console.log("用戶選擇:", outcome);
+        this.deferredPrompt = null;
+        this.showInstallButton = false;
+      }
+    }
   },
 
   mounted() {
-    // PWA 安裝提示
+    // 讓 Google Maps callback 找得到 Vue 物件
+    window.vueApp = this;
+
+    // Firestore 載入 & 即時監聽
+    this.loadFromFirestoreAndListen();
+
+    // PWA Service Worker（如果有放 service-worker.js）
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker
+          .register("./service-worker.js")
+          .then((reg) => console.log("ServiceWorker 註冊成功:", reg.scope))
+          .catch((err) => console.log("ServiceWorker 註冊失敗:", err));
+      });
+    }
+
+    // 安裝提示事件
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
       this.deferredPrompt = e;
-      this.showInstallButton = true;
+      this.showInstallPrompt();
     });
 
-    // Service Worker 註冊（PWA 快取）
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register("./service-worker.js")
-        .then(() => console.log("Service Worker registered"))
-        .catch((err) => console.error("SW register failed", err));
+    // 若 Google Maps 已經載入就初始化
+    if (window.googleMapsLoaded) {
+      setTimeout(() => {
+        if (typeof google !== "undefined" && google.maps) {
+          this.initMap();
+        }
+      }, 500);
     }
-
-    // 先從 Firestore 讀資料（失敗就會自動 fallback localStorage）
-    this.loadFromFirestore();
   },
+
+  watch: {
+    transports: {
+      deep: true,
+      handler() {
+        this.saveToFirestore();
+      }
+    },
+    itineraries: {
+      deep: true,
+      handler() {
+        this.saveToFirestore();
+      }
+    },
+    accommodations: {
+      deep: true,
+      handler() {
+        this.saveToFirestore();
+      }
+    },
+    expenses: {
+      deep: true,
+      handler() {
+        this.saveToFirestore();
+      }
+    },
+    checklistItems: {
+      deep: true,
+      handler() {
+        this.saveToFirestore();
+      }
+    },
+    exchangeRate() {
+      this.saveToFirestore();
+    },
+    person1Name() {
+      this.saveToFirestore();
+    },
+    person2Name() {
+      this.saveToFirestore();
+    },
+    tripDays(newVal) {
+      if (
+        newVal.length > 0 &&
+        !newVal.find((d) => d.dayNumber === this.selectedDayNumber)
+      ) {
+        this.selectedDayNumber = 1;
+      }
+    }
+  }
 });
 
+// 掛載 Vue
 app.mount("#app");
