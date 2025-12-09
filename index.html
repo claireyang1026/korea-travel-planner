@@ -615,8 +615,48 @@
     </div>
 
     <!-- 載入 Vue 與主程式 -->
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="app.js"></script>
+<script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+
+<!-- 🔥 Firebase 初始化（新增這段） -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getFirestore,
+    doc,
+    getDoc,
+    setDoc,
+    onSnapshot
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+  // ⬇⬇⬇ 把這裡換成你剛剛看到的 firebaseConfig ⬇⬇⬇
+  const firebaseConfig = {
+    apiKey: "AIzaSyBGgCKVVDF7AUcsd8VrisM3p6fWPIx1iow",
+    authDomain: "korea-travel-planner.firebaseapp.com",
+    projectId: "korea-travel-planner",
+    storageBucket: "korea-travel-planner.firebasestorage.app",
+    messagingSenderId: "408025232778",
+    appId: "1:408025232778:web:ccd3e4746b2a654ec84473"
+  };
+  // ⬆⬆⬆ 這一整個物件用你的設定覆蓋 ⬆⬆⬆
+
+  const fbApp = initializeApp(firebaseConfig);
+  const db = getFirestore(fbApp);
+
+  // 這個 tripId 代表「同一份行程」，
+  // 你可以改成別的字串，類似房號的概念
+  const tripId = "korea-shared-trip";
+
+  const tripDocRef = doc(db, "trips", tripId);
+
+  // 暴露給 app.js 用
+  window.firebaseDB = db;
+  window.tripDocRef = tripDocRef;
+  window.firebaseFns = { getDoc, setDoc, onSnapshot };
+</script>
+
+<!-- 你原本的主程式 -->
+<script src="app.js"></script>
+
     <!-- Google Maps 放在最後，callback 會呼叫 app.js 裡的 initGoogleMaps -->
     <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDF0UJweH5b2650oRc0_yv6m7R2ykchacc&libraries=places&language=zh-TW&callback=initGoogleMaps"></script>
 </body>
