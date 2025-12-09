@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="description" content="韓國旅遊規劃 - 行程規劃、記帳、必備物品清單">
+    <meta name="theme-color" content="#4a90e2">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="韓國旅遊">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="stylesheet" href="style.css">
+    <title>韓國旅遊規劃</title>
+</head>
+<body>
+    <div id="app">
+        <div class="container">
+            <header>
+                <h1>🇰🇷 韓國旅遊規劃</h1>
+                <p>輕鬆管理您的韓國之旅</p>
+            </header>
+
+            <div class="tabs">
+                <button 
+                    v-for="tab in tabs" 
+                    :key="tab.id"
+                    @click="activeTab = tab.id"
+                    :class="['tab-btn', { active: activeTab === tab.id }]"
+                >
+                    {{ tab.name }}
+                </button>
+            </div>
+
+            <!-- PWA 安裝提示 -->
+            <div v-if="showInstallButton" style="background: #4a90e2; color: white; padding: 15px; margin-bottom: 20px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <div>
+                    <strong>📱 安裝到手機</strong>
+                    <div style="font-size: 14px; margin-top: 5px;">將此應用安裝到主畫面，像APP一樣使用</div>
+                </div>
+                <button @click="installApp" class="btn" style="background: white; color: #4a90e2; margin: 0;">安裝</button>
+            </div>
+
+            <!-- 每日行程總覽 -->
+            <div v-show="activeTab === 'daily'" class="tab-content">
+                <h2 style="margin-bottom: 20px;">每日行程總覽</h2>
+                
+                <!-- 天數選擇 -->
+                <div v-if="tripDays.length > 0" style="margin-bottom: 20px;">
+                    <div class="form-group">
+                        <label>選擇天數</label>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+                            <button 
+                                v-for="day in tripDays" 
+                                :key="day.dayNumber"
+                                @click="selectedDayNumber = day.dayNumber"
+                                :class="['btn', { active: selectedDayNumber === day.dayNumber }]"
+                                :style="{
+                                    background: selectedDayNumber === day.dayNumber ? '#4a90e2' : 'white',
+                                    color: selectedDayNumber === day.dayNumber ? 'white' : '#4a90e2',
+                                    border: '2px solid #4a90e2',
+                                    padding: '10px 20px',
+                                    fontSize: '14px'
+                                }"
+                            >
+                                {{ day.label }}
+                            </button>
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px; padding: 10px; background: #e8f4f8; border-radius: 6px;">
+                        <div style="font-size: 14px; color: #666;">
+                            <strong>行程期間：</strong>{{ formatDateRange(tripStartDate, tripEndDate) }}
+                        </div>
+                        <div v-if="currentDayInfo" style="font-size: 14px; color: #666; margin-top: 5px;">
+                            <strong>日期：</strong>{{ formatDate(currentDayInfo.date) }}
+                        </div>
+                    </div>
+                </div>
+                
+                <div v-else style="padding: 20px; background: #fff3cd; border-radius: 6px; margin-bottom: 20px;">
+                    <p style="color: #856404; margin: 0;">
+                        ⚠️ 請先新增機票資訊，系統會自動根據所有行程資料（機票、行程、住宿）計算天數
+                    </p>
+                </div>
+
+                <div v-if="dailySchedule.length === 0 && tripDays.length > 0" class="empty-state">
+                    {{ currentDayInfo ? currentDayInfo.label : 'Day1' }} 當日尚無行程安排
+                </div>
+
+                <div v-else-if="dailySchedule.length > 0">
+                    <h3 style="margin-bottom: 15px; color: #4a90e2;">
+                        {{ currentDayInfo ? currentDayInfo.label : 'Day1' }} - {{ currentDayInfo ? formatDate(currentDayInfo.date) : formatDate(selectedDate) }} 的行程
+                    </h3>
+                    <div v-for="(item, index) in dailySchedule" :key="index" class="list-item" :style="{ borderLeftColor: item.color }">
+                        <div class="list-item-header">
+                            <div>
+                                <span style="background: #4a90e2; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-right: 8px;">
+                                    {{ item.time }}
+                                </span>
+                                <span class="list-item-title">{{ item.title }}</span>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <button v-if="item.locationData && item.locationData.lat" @click="showMap(item.locationData)" class="btn btn-map" style="padding: 4px 8px; font-size: 11px;">地圖</button>
+                                <button v-if="item.locationData && item.locationData.lat" @click="showRoute(item.locationData)" class="btn btn-route" style="padding: 4px 8px; font-size: 11px;">路線</button>
+                                <span style="font-size: 12px; color: #999;">
+                                    {{ item.type }}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="list-item-info" v-if="item.details">
+                            {{ item.details }}
+                        </div>
+                        <div v-if="item.extraInfo" class="list-item-info" style="margin-top: 5px; color: #856404; background: #fff3cd; padding: 8px; border-radius: 4px;">
+                            🚇 {{ item.extraInfo }}
+                        </div>
+                        <div v-if="item.locationData && item.locationData.fromItineraryId" style="margin-top: 8px;">
+                            <button @click="showRouteBetween(item.locationData.fromItineraryId, item.locationData)" class="btn btn-route" style="padding: 4px 8px; font-size: 11px;">查看詳細路線</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 機票/車票時間 -->
+            <div v-show="activeTab === 'transport'" class="tab-content">
+                <h2 style="margin-bottom: 20px;">機票/車票時間</h2>
+                <form @submit.prevent="addTransport">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>類型</label>
+                            <select v-model="newTransport.type" required>
+                                <option value="">請選擇</option>
+                                <option value="機票">機票</option>
+                                <option value="高鐵">高鐵</option>
+                                <option value="地鐵">地鐵</option>
+                                <option value="巴士">巴士</option>
+                                <option value="計程車">計程車</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>出發地</label>
+                            <input type="text" v-model="newTransport.from" required placeholder="例如：台北">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>目的地</label>
+                            <input type="text" v-model="newTransport.to" required placeholder="例如：首爾">
+                        </div>
+                        <div class="form-group">
+                            <label>日期</label>
+                            <input type="date" v-model="newTransport.date" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>出發時間</label>
+                            <input type="time" v-model="newTransport.departureTime" required>
+                        </div>
+                        <div class="form-group">
+                            <label>抵達時間</label>
+                            <input type="time" v-model="newTransport.arrivalTime" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>備註</label>
+                        <textarea v-model="newTransport.notes" placeholder="航班號碼、座位號等"></textarea>
+                    </div>
+                    <button type="submit" class="btn">新增</button>
+                </form>
+
+                <div style="margin-top: 30px;">
+                    <h3 style="margin-bottom: 15px;">已記錄的交通資訊</h3>
+                    <div v-if="transports.length === 0" class="empty-state">
+                        尚無記錄
+                    </div>
+                    <div v-for="(transport, index) in transports" :key="index" class="list-item">
+                        <div class="list-item-header">
+                            <div class="list-item-title">{{ transport.type }}：{{ transport.from }} → {{ transport.to }}</div>
+                            <div class="list-item-actions">
+                                <button @click="editTransport(index)" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">編輯</button>
+                                <button @click="deleteTransport(index)" class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;">刪除</button>
+                            </div>
+                        </div>
+                        <div class="list-item-info">日期：{{ transport.date }}</div>
+                        <div class="list-item-info">時間：{{ transport.departureTime }} - {{ transport.arrivalTime }}</div>
+                        <div v-if="transport.notes" class="list-item-info">備註：{{ transport.notes }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 行程規劃 -->
+            <div v-show="activeTab === 'itinerary'" class="tab-content">
+                <h2 style="margin-bottom: 20px;">行程規劃</h2>
+                <form @submit.prevent="addItinerary">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>日期</label>
+                            <input type="date" v-model="newItinerary.date" required>
+                        </div>
+                        <div class="form-group">
+                            <label>時間</label>
+                            <input type="time" v-model="newItinerary.time" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>地點/活動</label>
+                        <div class="location-input-group">
+                            <input 
+                                type="text" 
+                                v-model="newItinerary.location" 
+                                @input="searchPlaces"
+                                @focus="showSuggestions = true"
+                                required 
+                                placeholder="例如：明洞、景福宮"
+                                id="location-input"
+                            >
+                            <div v-if="showSuggestions && placeSuggestions.length > 0" class="autocomplete-suggestions">
+                                <div 
+                                    v-for="(suggestion, idx) in placeSuggestions" 
+                                    :key="idx"
+                                    @click="selectPlace(suggestion)"
+                                    class="suggestion-item"
+                                >
+                                    <div style="font-weight: 600;">{{ suggestion.name }}</div>
+                                    <div style="font-size: 12px; color: #666;">{{ suggestion.address }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="newItinerary.address" class="form-group">
+                        <label>地址</label>
+                        <input type="text" v-model="newItinerary.address" readonly style="background: #f5f5f5;">
+                    </div>
+                    <div v-if="newItinerary.lat && newItinerary.lng" class="form-row">
+                        <div class="form-group">
+                            <label>緯度</label>
+                            <input type="text" v-model="newItinerary.lat" readonly style="background: #f5f5f5;">
+                        </div>
+                        <div class="form-group">
+                            <label>經度</label>
+                            <input type="text" v-model="newItinerary.lng" readonly style="background: #f5f5f5;">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>從哪個行程出發（選填）</label>
+                        <select v-model="newItinerary.fromItineraryId">
+                            <option value="">無（獨立行程）</option>
+                            <option 
+                                v-for="(itinerary, idx) in availablePreviousItineraries" 
+                                :key="idx"
+                                :value="itinerary.originalIndex"
+                            >
+                                {{ itinerary.date }} {{ itinerary.time }} - {{ itinerary.location }}
+                            </option>
+                        </select>
+                        <small style="color: #666; display: block; margin-top: 5px;">選擇後會自動計算從上一個行程到這裡的路線</small>
+                    </div>
+                    <div class="form-group">
+                        <label>詳細說明</label>
+                        <textarea v-model="newItinerary.description" placeholder="活動內容、注意事項等"></textarea>
+                    </div>
+                    <button type="submit" class="btn">新增行程</button>
+                </form>
+
+                <div style="margin-top: 30px;">
+                    <h3 style="margin-bottom: 15px;">行程列表</h3>
+                    <div v-if="itineraries.length === 0" class="empty-state">
+                        尚無行程
+                    </div>
+                    <div v-for="(itinerary, index) in sortedItineraries" :key="index" class="list-item">
+                        <!-- 顯示從上一個行程到這裡的路線 -->
+                        <div v-if="itinerary.fromItineraryId !== '' && itinerary.fromItineraryId !== null && itinerary.routeInfo" class="route-between">
+                            <div class="route-between-title">
+                                🚇 從 {{ getItineraryName(itinerary.fromItineraryId) }} 到這裡的路線
+                            </div>
+                            <div class="transit-details">
+                                <div v-for="(route, routeIdx) in itinerary.routeInfo" :key="routeIdx" style="margin-bottom: 10px;">
+                                    <div style="font-weight: 600; margin-bottom: 5px;">
+                                        {{ route.mode === 'TRANSIT' ? '🚇 大眾運輸' : route.mode === 'DRIVING' ? '🚗 開車' : route.mode === 'WALKING' ? '🚶 步行' : '🚴 單車' }}
+                                        <span style="color: #666; font-size: 12px; margin-left: 10px;">
+                                            {{ route.duration }} | {{ route.distance }}
+                                        </span>
+                                    </div>
+                                    <div v-if="route.transitDetails" class="transit-step metro">
+                                        <div v-for="(step, stepIdx) in route.transitDetails" :key="stepIdx" style="margin: 8px 0;">
+                                            <div v-if="step.type === 'WALKING'" class="transit-step walk">
+                                                <strong>🚶 步行</strong> {{ step.instruction }}
+                                                <span v-if="step.duration">（{{ step.duration }}）</span>
+                                            </div>
+                                            <div v-else-if="step.type === 'TRANSIT'" class="transit-step metro">
+                                                <div>
+                                                    <span class="station-name">{{ step.departureStop }}</span>
+                                                    <span class="line-name">{{ step.lineName }}</span>
+                                                    <span style="color: #666;">→</span>
+                                                    <span class="station-name">{{ step.arrivalStop }}</span>
+                                                </div>
+                                                <div style="font-size: 12px; color: #666; margin-top: 4px;">
+                                                    {{ step.headsign }} | {{ step.numStops }}站 | {{ step.duration }}
+                                                </div>
+                                            </div>
+                                            <div v-else-if="step.type === 'TRANSFER'" class="transit-step transfer">
+                                                <strong>🔄 轉乘</strong> 在 <span class="station-name">{{ step.station }}</span> 轉乘
+                                                <span v-if="step.toLine" class="line-name" style="margin-left: 5px;">{{ step.toLine }}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div v-else>
+                                        <div v-for="(step, stepIdx) in route.steps" :key="stepIdx" style="margin: 4px 0; padding-left: 10px; border-left: 2px solid #ddd; font-size: 13px;">
+                                            {{ step.instruction }}
+                                            <span v-if="step.duration" style="color: #999;">（{{ step.duration }}）</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="list-item-header">
+                            <div class="list-item-title">{{ itinerary.location }}</div>
+                            <div class="list-item-actions">
+                                <button v-if="itinerary.lat && itinerary.lng" @click="showMap(itinerary)" class="btn btn-map">查看地圖</button>
+                                <button v-if="itinerary.lat && itinerary.lng && itinerary.fromItineraryId !== '' && itinerary.fromItineraryId !== null" @click="showRouteBetween(itinerary.fromItineraryId, index)" class="btn btn-route">查看路線</button>
+                                <button v-else-if="itinerary.lat && itinerary.lng && availablePreviousItineraries.length > 0" @click="quickSetRoute(index)" class="btn quick-route-btn">設定路線</button>
+                                <button v-else-if="itinerary.lat && itinerary.lng" @click="showRoute(itinerary)" class="btn btn-route">路線規劃</button>
+                                <button @click="editItinerary(index)" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">編輯</button>
+                                <button @click="deleteItinerary(index)" class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;">刪除</button>
+                            </div>
+                        </div>
+                        <div class="list-item-info">日期：{{ itinerary.date }} | 時間：{{ itinerary.time }}</div>
+                        <div v-if="itinerary.address" class="list-item-info">地址：{{ itinerary.address }}</div>
+                        <div v-if="itinerary.description" class="list-item-info">{{ itinerary.description }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 入住資料 -->
+            <div v-show="activeTab === 'accommodation'" class="tab-content">
+                <h2 style="margin-bottom: 20px;">入住資料</h2>
+                <form @submit.prevent="addAccommodation">
+                    <div class="form-group">
+                        <label>飯店/住宿名稱</label>
+                        <input type="text" v-model="newAccommodation.name" required placeholder="例如：首爾樂天酒店">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>入住日期</label>
+                            <input type="date" v-model="newAccommodation.checkIn" required>
+                        </div>
+                        <div class="form-group">
+                            <label>退房日期</label>
+                            <input type="date" v-model="newAccommodation.checkOut" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>地址</label>
+                        <input type="text" v-model="newAccommodation.address" placeholder="詳細地址">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>聯絡電話</label>
+                            <input type="text" v-model="newAccommodation.phone" placeholder="飯店電話">
+                        </div>
+                        <div class="form-group">
+                            <label>房間號碼</label>
+                            <input type="text" v-model="newAccommodation.roomNumber" placeholder="房間號">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>備註</label>
+                        <textarea v-model="newAccommodation.notes" placeholder="其他資訊"></textarea>
+                    </div>
+                    <button type="submit" class="btn">新增住宿</button>
+                </form>
+
+                <div style="margin-top: 30px;">
+                    <h3 style="margin-bottom: 15px;">住宿記錄</h3>
+                    <div v-if="accommodations.length === 0" class="empty-state">
+                        尚無記錄
+                    </div>
+                    <div v-for="(accommodation, index) in accommodations" :key="index" class="list-item">
+                        <div class="list-item-header">
+                            <div class="list-item-title">{{ accommodation.name }}</div>
+                            <div class="list-item-actions">
+                                <button @click="editAccommodation(index)" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">編輯</button>
+                                <button @click="deleteAccommodation(index)" class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;">刪除</button>
+                            </div>
+                        </div>
+                        <div class="list-item-info">入住：{{ accommodation.checkIn }} | 退房：{{ accommodation.checkOut }}</div>
+                        <div v-if="accommodation.address" class="list-item-info">地址：{{ accommodation.address }}</div>
+                        <div v-if="accommodation.phone" class="list-item-info">電話：{{ accommodation.phone }}</div>
+                        <div v-if="accommodation.roomNumber" class="list-item-info">房間：{{ accommodation.roomNumber }}</div>
+                        <div v-if="accommodation.notes" class="list-item-info">備註：{{ accommodation.notes }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 必備物品清單 -->
+            <div v-show="activeTab === 'checklist'" class="tab-content">
+                <h2 style="margin-bottom: 20px;">必備物品清單</h2>
+                
+                <!-- 人員設定 -->
+                <div class="form-group" style="background: #e8f4f8; padding: 15px; border-radius: 6px; margin-bottom: 20px;">
+                    <label style="margin-bottom: 10px; display: block;">人員設定</label>
+                    <div class="form-row">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label style="font-size: 14px;">人員 1 名稱</label>
+                            <input type="text" v-model="person1Name" placeholder="例如：小明" style="margin-top: 5px;">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label style="font-size: 14px;">人員 2 名稱</label>
+                            <input type="text" v-model="person2Name" placeholder="例如：小華" style="margin-top: 5px;">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 新增物品表單 -->
+                <form @submit.prevent="addChecklistItem">
+                    <div class="form-group">
+                        <label>物品名稱</label>
+                        <input type="text" v-model="newChecklistItem.name" required placeholder="例如：護照、充電器">
+                    </div>
+                    <button type="submit" class="btn">新增物品</button>
+                </form>
+
+                <!-- 物品清單 -->
+                <div style="margin-top: 30px;">
+                    <h3 style="margin-bottom: 15px;">物品清單</h3>
+                    <div v-if="checklistItems.length === 0" class="empty-state">
+                        尚無物品
+                    </div>
+                    <div class="checklist-container">
+                        <div v-for="(item, index) in checklistItems" :key="index" class="checklist-item">
+                            <div class="checklist-item-name" :class="{ completed: isItemCompleted(item) }">
+                                {{ item.name }}
+                            </div>
+                            <div class="checklist-people">
+                                <div class="person-checkbox">
+                                    <input 
+                                        type="checkbox" 
+                                        :id="`person1-${index}`"
+                                        :checked="item.person1Checked"
+                                        @change="toggleChecklistItem(index, 'person1')"
+                                    >
+                                    <label :for="`person1-${index}`" class="person-name">
+                                        {{ person1Name || '人員 1' }}
+                                    </label>
+                                </div>
+                                <div class="person-checkbox">
+                                    <input 
+                                        type="checkbox" 
+                                        :id="`person2-${index}`"
+                                        :checked="item.person2Checked"
+                                        @change="toggleChecklistItem(index, 'person2')"
+                                    >
+                                    <label :for="`person2-${index}`" class="person-name">
+                                        {{ person2Name || '人員 2' }}
+                                    </label>
+                                </div>
+                                <button @click="deleteChecklistItem(index)" class="btn btn-danger" style="padding: 6px 12px; font-size: 12px; margin-left: 10px;">刪除</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 完成度統計 -->
+                    <div v-if="checklistItems.length > 0" class="summary-card" style="margin-top: 20px;">
+                        <h4 style="margin-bottom: 10px;">完成度統計</h4>
+                        <div class="summary-item">
+                            <span>{{ person1Name || '人員 1' }}：</span>
+                            <span>{{ getPersonCompletion('person1') }}% ({{ getPersonCheckedCount('person1') }}/{{ checklistItems.length }})</span>
+                        </div>
+                        <div class="summary-item">
+                            <span>{{ person2Name || '人員 2' }}：</span>
+                            <span>{{ getPersonCompletion('person2') }}% ({{ getPersonCheckedCount('person2') }}/{{ checklistItems.length }})</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 記帳功能 -->
+            <div v-show="activeTab === 'expense'" class="tab-content">
+                <h2 style="margin-bottom: 20px;">記帳功能</h2>
+                
+                <div class="summary-card">
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label>匯率設定（1韓元 = ? 台幣）</label>
+                        <input type="number" v-model.number="exchangeRate" step="0.0001" min="0" style="max-width: 200px;">
+                        <small style="color: #666; display: block; margin-top: 5px;">預設：0.025（約 1台幣 = 40韓元）</small>
+                    </div>
+                    <h3 style="margin-bottom: 15px;">總覽</h3>
+                    <div class="summary-item">
+                        <span>總收入：</span>
+                        <div style="text-align: right;">
+                            <div class="amount income">₩{{ totalIncome.toLocaleString() }}</div>
+                            <div style="font-size: 12px; color: #666;">NT${{ totalIncomeTWD.toLocaleString() }}</div>
+                        </div>
+                    </div>
+                    <div class="summary-item">
+                        <span>總支出：</span>
+                        <div style="text-align: right;">
+                            <div class="amount expense">₩{{ totalExpense.toLocaleString() }}</div>
+                            <div style="font-size: 12px; color: #666;">NT${{ totalExpenseTWD.toLocaleString() }}</div>
+                        </div>
+                    </div>
+                    <div class="summary-item" style="border-top: 1px solid #ccc; padding-top: 10px; margin-top: 10px;">
+                        <span><strong>結餘：</strong></span>
+                        <div style="text-align: right;">
+                            <span class="amount" :style="{ color: balance >= 0 ? '#27ae60' : '#e74c3c' }">
+                                ₩{{ balance.toLocaleString() }}
+                            </span>
+                            <div style="font-size: 12px; color: #666;">NT${{ balanceTWD.toLocaleString() }}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <form @submit.prevent="addExpense">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>類型</label>
+                            <select v-model="newExpense.type" required>
+                                <option value="">請選擇</option>
+                                <option value="income">收入</option>
+                                <option value="expense">支出</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>金額 (₩)</label>
+                            <input type="number" v-model.number="newExpense.amount" required min="0" placeholder="0">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>類別</label>
+                        <select v-model="newExpense.category" required>
+                            <option value="">請選擇</option>
+                            <option v-if="newExpense.type === 'income'" value="換匯">換匯</option>
+                            <option v-if="newExpense.type === 'income'" value="其他收入">其他收入</option>
+                            <option v-if="newExpense.type === 'expense'" value="餐飲">餐飲</option>
+                            <option v-if="newExpense.type === 'expense'" value="購物">購物</option>
+                            <option v-if="newExpense.type === 'expense'" value="交通">交通</option>
+                            <option v-if="newExpense.type === 'expense'" value="住宿">住宿</option>
+                            <option v-if="newExpense.type === 'expense'" value="景點門票">景點門票</option>
+                            <option v-if="newExpense.type === 'expense'" value="其他">其他</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>日期</label>
+                            <input type="date" v-model="newExpense.date" required>
+                        </div>
+                        <div class="form-group">
+                            <label>時間</label>
+                            <input type="time" v-model="newExpense.time" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>備註</label>
+                        <input type="text" v-model="newExpense.notes" placeholder="說明">
+                    </div>
+                    <button type="submit" class="btn">新增記錄</button>
+                </form>
+
+                <div style="margin-top: 30px;">
+                    <h3 style="margin-bottom: 15px;">記錄列表</h3>
+                    <div v-if="expenses.length === 0" class="empty-state">
+                        尚無記錄
+                    </div>
+                    <div v-for="(expense, index) in sortedExpenses" :key="index" class="list-item">
+                        <div class="list-item-header">
+                            <div>
+                                <span class="list-item-title">{{ expense.category }}</span>
+                                <div style="margin-left: 10px; display: inline-block;">
+                                    <span class="amount" :class="expense.type">
+                                        {{ expense.type === 'income' ? '+' : '-' }}₩{{ expense.amount.toLocaleString() }}
+                                    </span>
+                                    <div style="font-size: 12px; color: #666; margin-top: 2px;">
+                                        {{ expense.type === 'income' ? '+' : '-' }}NT${{ convertToTWD(expense.amount).toLocaleString() }}
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="list-item-actions">
+                                <button @click="editExpense(index)" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">編輯</button>
+                                <button @click="deleteExpense(index)" class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;">刪除</button>
+                            </div>
+                        </div>
+                        <div class="list-item-info">日期：{{ expense.date }} | 時間：{{ expense.time }}</div>
+                        <div v-if="expense.notes" class="list-item-info">備註：{{ expense.notes }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 地圖模態視窗 -->
+        <div :class="['map-modal', { active: showMapModal }]" @click.self="closeMapModal">
+            <div class="map-modal-content">
+                <button class="map-modal-close" @click="closeMapModal">&times;</button>
+                <h3 style="margin-bottom: 15px;">{{ currentLocationName }}</h3>
+                <div id="map" class="map-container"></div>
+                <div v-if="routeInfo" class="route-info">
+                    <h4 style="margin-bottom: 10px;">路線規劃</h4>
+                    <div v-for="(route, idx) in routeInfo" :key="idx" class="route-option">
+                        <div class="route-option-title">
+                            {{ route.mode === 'TRANSIT' ? '🚇 大眾運輸' : route.mode === 'DRIVING' ? '🚗 開車' : route.mode === 'WALKING' ? '🚶 步行' : '🚴 單車' }}
+                        </div>
+                        <div class="route-option-details">
+                            <div>時間：{{ route.duration }}</div>
+                            <div>距離：{{ route.distance }}</div>
+                            <div v-if="route.steps" style="margin-top: 8px; font-size: 12px;">
+                                <div v-for="(step, stepIdx) in route.steps" :key="stepIdx" style="margin: 4px 0; padding-left: 10px; border-left: 2px solid #ddd;">
+                                    {{ step.instruction }}
+                                    <span v-if="step.duration" style="color: #999;">（{{ step.duration }}）</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 載入 Vue 與主程式 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="app.js"></script>
+    <!-- Google Maps 放在最後，callback 會呼叫 app.js 裡的 initGoogleMaps -->
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDF0UJweH5b2650oRc0_yv6m7R2ykchacc&libraries=places&language=zh-TW&callback=initGoogleMaps"></script>
+</body>
+</html>
